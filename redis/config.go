@@ -1,8 +1,12 @@
 package redis
 
 import (
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +25,12 @@ type RedisConfig struct {
 	SentinelDiscoveryInterval int `toml:"sentinel_discovery_interval"`
 	// Redis keepalive ping interval (seconds)
 	KeepalivePingInterval int `toml:"keepalive_ping_interval"`
+	// Path to a client certificate for Redis TLS (optional)
+	TLSCert string `toml:"tls_cert"`
+	// Path to a client key for Redis TLS (optional)
+	TLSKey string `toml:"tls_key"`
+	// Path to a CA cert file for Redis TLS (optional)
+	TLSCACert string `toml:"tls_ca_cert"`
 	// Whether to check server's certificate for validity (in case of rediss:// protocol)
 	TLSVerify bool `toml:"tls_verify"`
 	// Max number of reconnect attempts
@@ -100,8 +110,12 @@ func (config *RedisConfig) ToRueidisOptions() (options *rueidis.ClientOption, er
 
 	options.ShuffleInit = config.IsCluster()
 
-	if options.TLSConfig != nil {
-		options.TLSConfig.InsecureSkipVerify = !config.TLSVerify
+	if err := config.configureTLS(options.Sentinel.TLSConfig); err != nil {
+		return nil, err
+	}
+
+	if err := config.configureTLS(options.TLSConfig); err != nil {
+		return nil, err
 	}
 
 	options.DisableCache = config.DisableCache
@@ -109,25 +123,74 @@ func (config *RedisConfig) ToRueidisOptions() (options *rueidis.ClientOption, er
 	return options, nil
 }
 
+func (config *RedisConfig) configureTLS(tlsConfig *tls.Config) error {
+	if tlsConfig == nil {
+		return nil
+	}
+
+	config.mu.RLock()
+	defer config.mu.RUnlock()
+
+	if config.TLSCert != "" && config.TLSKey != "" {
+		cert, err := tls.LoadX509KeyPair(config.TLSCert, config.TLSKey)
+		if err != nil {
+			return err
+		}
+
+		tlsConfig.Certificates = []tls.Certificate{cert}
+	}
+
+	if config.TLSCACert != "" {
+		caCert, err := os.ReadFile(config.TLSCACert)
+		if err != nil {
+			return err
+		}
+
+		caCertPool := x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return errors.New("failed to parse CA certificate")
+		}
+
+		tlsConfig.RootCAs = caCertPool
+	}
+
+	tlsConfig.InsecureSkipVerify = !config.TLSVerify
+
+	return nil
+}
+
 func (config *RedisConfig) parseSentinels() (*rueidis.ClientOption, error) {
 	config.mu.RLock()
 	defer config.mu.RUnlock()
 
-	sentinelMaster, err := url.Parse(config.URL)
+	masterURL, err := url.Parse(config.URL)
 
 	if err != nil {
 		return nil, err
 	}
 
-	options, err := parseRedisURL(config.Sentinels)
+	masterOptions, err := parseRedisURL(config.URL)
 
 	if err != nil {
 		return nil, err
 	}
 
-	options.Sentinel.MasterSet = sentinelMaster.Host
+	sentinelOptions, err := parseRedisURL(config.Sentinels)
 
-	return options, nil
+	if err != nil {
+		return nil, err
+	}
+
+	sentinelOptions.Sentinel.TLSConfig = sentinelOptions.TLSConfig
+	sentinelOptions.Sentinel.MasterSet = masterURL.Hostname()
+	sentinelOptions.Sentinel.Username = sentinelOptions.Username
+	sentinelOptions.Sentinel.Password = sentinelOptions.Password
+
+	sentinelOptions.TLSConfig = masterOptions.TLSConfig
+	sentinelOptions.Username = masterOptions.Username
+	sentinelOptions.Password = masterOptions.Password
+
+	return sentinelOptions, nil
 }
 
 func (config *RedisConfig) ToToml() string {

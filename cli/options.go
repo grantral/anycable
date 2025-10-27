@@ -722,6 +722,24 @@ func redisCLIFlags(c *config.Config) []cli.Flag {
 			Hidden:      true,
 		},
 
+		&cli.StringFlag{
+			Name:        "redis_tls_cert",
+			Usage:       "Path to a client certificate for Redis TLS",
+			Destination: &c.Redis.TLSCert,
+		},
+
+		&cli.StringFlag{
+			Name:        "redis_tls_key",
+			Usage:       "Path to a client key for Redis TLS",
+			Destination: &c.Redis.TLSKey,
+		},
+
+		&cli.StringFlag{
+			Name:        "redis_tls_ca",
+			Usage:       "Path to a CA certificate for Redis TLS",
+			Destination: &c.Redis.TLSCACert,
+		},
+
 		&cli.BoolFlag{
 			Name:        "redis_tls_verify",
 			Usage:       "Verify Redis server TLS certificate (only if URL protocol is rediss://)",
