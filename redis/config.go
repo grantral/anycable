@@ -160,7 +160,13 @@ func (config *RedisConfig) parseSentinels() (*rueidis.ClientOption, error) {
 	config.mu.RLock()
 	defer config.mu.RUnlock()
 
-	sentinelMaster, err := url.Parse(config.URL)
+	masterURL, err := url.Parse(config.URL)
+
+	if err != nil {
+		return nil, err
+	}
+
+	masterOptions, err := parseRedisURL(config.URL)
 
 	if err != nil {
 		return nil, err
@@ -172,7 +178,11 @@ func (config *RedisConfig) parseSentinels() (*rueidis.ClientOption, error) {
 		return nil, err
 	}
 
-	options.Sentinel.MasterSet = sentinelMaster.Host
+	// TODO: use values from env vars
+	options.Sentinel.TLSConfig = masterOptions.TLSConfig
+	options.Sentinel.MasterSet = masterURL.Hostname()
+	options.Sentinel.Username = masterOptions.Username
+	options.Sentinel.Password = masterOptions.Password
 
 	return options, nil
 }
