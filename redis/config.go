@@ -184,6 +184,10 @@ func (config *RedisConfig) parseSentinels() (*rueidis.ClientOption, error) {
 	options.Sentinel.Username = masterOptions.Username
 	options.Sentinel.Password = masterOptions.Password
 
+	options.TLSConfig = masterOptions.TLSConfig
+	options.Username = masterOptions.Username
+	options.Password = masterOptions.Password
+
 	return options, nil
 }
 
