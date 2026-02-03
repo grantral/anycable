@@ -316,11 +316,14 @@ func TestSentinel(t *testing.T) {
 	assert.True(t, config.IsSentinel())
 
 	assert.Equal(t, "master-name", config.Hostname())
-	assert.Equal(t, []string{"localhost:1234", "localhost:1235"}, config.Hostnames())
 
+	assert.Equal(t, []string{"localhost:1234", "localhost:1235"}, config.Hostnames())
 	assert.Equal(t, []string{"localhost:1234", "localhost:1235"}, options.InitAddress)
-	assert.Equal(t, "user", options.Username)
-	assert.Equal(t, "pass", options.Password)
+
+	assert.Empty(t, options.Username)
+	assert.Empty(t, options.Password)
+	assert.Equal(t, "user", options.Sentinel.Username)
+	assert.Equal(t, "pass", options.Sentinel.Password)
 }
 
 func TestSentinelImplicitFormat(t *testing.T) {
@@ -338,6 +341,206 @@ func TestSentinelImplicitFormat(t *testing.T) {
 	assert.Equal(t, []string{"localhost:1234"}, options.InitAddress)
 	assert.Equal(t, "user", options.Username)
 	assert.Equal(t, "pass", options.Password)
+}
+
+func TestSentinelNoTLS(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-name"
+	config.Sentinels = "redis://localhost:1234,redis://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Neither Sentinel nor Master should have TLS configured
+	assert.Nil(t, options.Sentinel.TLSConfig, "Sentinel TLS config should be nil")
+	assert.Nil(t, options.TLSConfig, "Master TLS config should be nil")
+}
+
+func TestSentinelTLSOnlyMaster(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "rediss://master-name"
+	config.Sentinels = "redis://localhost:26379"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Only Master should have TLS configured
+	assert.Nil(t, options.Sentinel.TLSConfig, "Sentinel TLS config should be nil")
+	assert.NotNil(t, options.TLSConfig, "Master TLS config should be set")
+
+	assert.True(t, options.TLSConfig.InsecureSkipVerify)
+}
+
+func TestSentinelTLSOnlySentinel(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-name"
+	config.Sentinels = "rediss://localhost:1234,rediss://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Only Sentinel should have TLS configured
+	assert.NotNil(t, options.Sentinel.TLSConfig, "Sentinel TLS config should be set")
+	assert.Nil(t, options.TLSConfig, "Master TLS config should be nil")
+
+	assert.True(t, options.Sentinel.TLSConfig.InsecureSkipVerify)
+}
+
+func TestSentinelTLSBothSecure(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "rediss://master-name"
+	config.Sentinels = "rediss://localhost:1234,rediss://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Both Sentinel and Master should have TLS configured
+	assert.NotNil(t, options.Sentinel.TLSConfig, "Sentinel TLS config should be set")
+	assert.NotNil(t, options.TLSConfig, "Master TLS config should be set")
+
+	// Both should have InsecureSkipVerify enabled by default
+	assert.True(t, options.Sentinel.TLSConfig.InsecureSkipVerify)
+	assert.True(t, options.TLSConfig.InsecureSkipVerify)
+}
+
+func TestSentinelTLSVerify(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "rediss://master-name"
+	config.Sentinels = "rediss://localhost:1234,rediss://localhost:1235"
+	config.TLSVerify = true
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Both should have TLS with verification enabled
+	assert.NotNil(t, options.TLSConfig, "Master should have TLS")
+	assert.NotNil(t, options.Sentinel.TLSConfig, "Sentinel should have TLS")
+
+	assert.False(t, options.TLSConfig.InsecureSkipVerify, "Master should verify certificates")
+	assert.False(t, options.Sentinel.TLSConfig.InsecureSkipVerify, "Sentinel should verify certificates")
+}
+
+func TestSentinelOnlyMasterCredentials(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-user:master-pass@master-name"
+	config.Sentinels = "redis://localhost:1234,redis://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Sentinel without credentials
+	assert.Equal(t, "", options.Sentinel.Username, "Sentinel should have no username")
+	assert.Equal(t, "", options.Sentinel.Password, "Sentinel should have no password")
+
+	// Master with credentials
+	assert.Equal(t, "master-user", options.Username, "Master should have username")
+	assert.Equal(t, "master-pass", options.Password, "Master should have password")
+}
+
+func TestSentinelOnlySentinelCredentials(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-name"
+	config.Sentinels = "redis://sentinel-user:sentinel-pass@localhost:1234,redis://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Sentinel with credentials
+	assert.Equal(t, "sentinel-user", options.Sentinel.Username, "Sentinel should have username")
+	assert.Equal(t, "sentinel-pass", options.Sentinel.Password, "Sentinel should have password")
+
+	// Master without credentials
+	assert.Equal(t, "", options.Username, "Master should have no username")
+	assert.Equal(t, "", options.Password, "Master should have no password")
+}
+
+func TestSentinelDifferentCredentials(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-user:master-pass@master-name"
+	config.Sentinels = "redis://sentinel-user:sentinel-pass@localhost:1234,redis://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Sentinel should use credentials from Sentinels URL
+	assert.Equal(t, "sentinel-user", options.Sentinel.Username, "Sentinel username should be from Sentinels URL")
+	assert.Equal(t, "sentinel-pass", options.Sentinel.Password, "Sentinel password should be from Sentinels URL")
+
+	// Master should use credentials from Master URL
+	assert.Equal(t, "master-user", options.Username, "Master username should be from Master URL")
+	assert.Equal(t, "master-pass", options.Password, "Master password should be from Master URL")
+}
+
+func TestSentinelSameCredentials(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://user:pass@master-name"
+	config.Sentinels = "redis://user:pass@localhost:1234,redis://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Both Sentinel and Master should have same credentials
+	assert.Equal(t, "user", options.Sentinel.Username, "Sentinel should have username")
+	assert.Equal(t, "pass", options.Sentinel.Password, "Sentinel should have password")
+	assert.Equal(t, "user", options.Username, "Master should have username")
+	assert.Equal(t, "pass", options.Password, "Master should have password")
+}
+
+func TestSentinelDifferentTLSAndCredentials(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-user:master-pass@master-name"
+	config.Sentinels = "rediss://sentinel-user:sentinel-pass@localhost:1234,rediss://localhost:1235"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsSentinel())
+
+	// Sentinel: TLS + credentials
+	assert.NotNil(t, options.Sentinel.TLSConfig, "Sentinel should have TLS")
+	assert.Equal(t, "sentinel-user", options.Sentinel.Username)
+	assert.Equal(t, "sentinel-pass", options.Sentinel.Password)
+
+	// Master: no TLS + credentials
+	assert.Nil(t, options.TLSConfig, "Master should not have TLS")
+	assert.Equal(t, "master-user", options.Username)
+	assert.Equal(t, "master-pass", options.Password)
+}
+
+func TestSentinelInvalidURL(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "redis://master-name"
+	config.Sentinels = "invalid://"
+	_, err := config.ToRueidisOptions()
+	require.Error(t, err)
+}
+
+func TestClusterTLS(t *testing.T) {
+	config := NewRedisConfig()
+	config.URL = "rediss://localhost:6379,rediss://localhost:6380"
+	options, err := config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.True(t, config.IsCluster())
+	assert.False(t, config.IsSentinel())
+
+	assert.NotNil(t, options.TLSConfig, "Cluster should have TLS")
+	assert.True(t, options.TLSConfig.InsecureSkipVerify, "Default should skip verification")
+
+	// With TLSVerify enabled
+	config.TLSVerify = true
+	options, err = config.ToRueidisOptions()
+	require.NoError(t, err)
+
+	assert.False(t, options.TLSConfig.InsecureSkipVerify, "Should verify certificates when enabled")
 }
 
 func TestDefaultScheme(t *testing.T) {
